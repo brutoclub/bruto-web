@@ -90,9 +90,9 @@
   .hl{color:#fff;background-image:linear-gradient(var(--brand),var(--brand));background-repeat:no-repeat;background-size:100% 100%;background-position:0 0;padding:.02em .14em .11em;box-decoration-break:clone;-webkit-box-decoration-break:clone}
 
   /* ---------- Bandas azul marino en bucle ---------- */
-  .band{background:var(--navy);color:#fff;overflow:hidden;white-space:nowrap;padding:56px 0}
+  .band{background:var(--navy);color:#fff;overflow:hidden;white-space:nowrap;padding:24px 0}
   .band-track{display:inline-flex;animation:bandmove 28s linear infinite;will-change:transform;transform:translate3d(0,0,0)}
-  .band-track span{font-weight:800;font-size:clamp(3rem,6.3vw,5.1rem);letter-spacing:-.02em;padding-right:6.5rem;line-height:1.1}
+  .band-track span{font-weight:800;font-size:clamp(1.7rem,3.6vw,2.9rem);letter-spacing:-.02em;padding-right:4rem;line-height:1.1}
   @keyframes bandmove{from{transform:translate3d(0,0,0)}to{transform:translate3d(-50%,0,0)}}
 
   /* ---------- Secciones ---------- */
@@ -1239,7 +1239,12 @@
 
       var viewW = 0, cellW = 0, cellH = 0, gap = 16, totalW = 0;
       var centers = [], posMin = 0, posMax = 0;
-      var pos = 0, vel = 0, mode = 'idle', snapTarget = 0;
+      /* Movimiento por objetivo: pos siempre persigue a target con una
+         aproximación exponencial (rápida al principio, cada vez más
+         lenta al acercarse), así que nunca hay tirones ni rebotes: al
+         final de la tira el objetivo es el propio extremo y la foto
+         llega frenando con suavidad y se queda ahí. */
+      var pos = 0, target = 0, vel = 0, mode = 'idle';
       var dragging = false, dragStartX = 0, dragStartPos = 0, lastX = 0, lastT = 0;
       var rafId = null, wheelTimer = null;
 
@@ -1272,6 +1277,7 @@
         gl.viewport(0, 0, galCanvas.width, galCanvas.height);
         metrics();
         pos = clampPos(pos);
+        target = clampPos(target);
         render();
       }
       function nearestCenter(v){
@@ -1283,45 +1289,58 @@
       function loop(now){
         rafId = null;
         var dt = Math.min(50, now - loop.last); loop.last = now;
-        if (mode === 'inertia') {
-          pos += vel * dt / 1000;
-          vel *= Math.exp(-dt / 260);
-          if (pos < posMin) { pos = posMin; vel = 0; }
-          if (pos > posMax) { pos = posMax; vel = 0; }
-          if (Math.abs(vel) < 30) { mode = 'snap'; snapTarget = nearestCenter(pos); }
-        } else if (mode === 'snap') {
-          var k = 1 - Math.exp(-dt / 85);
-          pos += (snapTarget - pos) * k;
-          if (Math.abs(snapTarget - pos) < 0.1) { pos = snapTarget; mode = 'idle'; }
-        }
+        /* Arrastrando, la persecución es corta (respuesta inmediata pero
+           sin saltos); con la rueda, algo más larga; al soltar o con las
+           flechas, la llegada es la más suave de las tres. Como la
+           aproximación es exponencial, pos nunca sobrepasa el objetivo:
+           en los extremos frena hasta pararse, sin rebote. */
+        var tau = mode === 'drag' ? 42 : (mode === 'glide' ? 78 : 150);
+        var k = 1 - Math.exp(-dt / tau);
+        pos += (target - pos) * k;
+        var settled = Math.abs(target - pos) < 0.12;
+        if (settled) pos = target;
         render();
-        if (mode !== 'idle') rafId = requestAnimationFrame(loop);
+        if (mode === 'drag') { if (!settled) rafId = requestAnimationFrame(loop); }
+        else if (mode !== 'idle') {
+          if (settled) mode = 'idle';
+          else rafId = requestAnimationFrame(loop);
+        }
       }
       galCanvas.addEventListener('pointerdown', function(e){
-        dragging = true; mode = 'idle'; vel = 0;
-        dragStartX = lastX = e.clientX; dragStartPos = pos; lastT = performance.now();
+        dragging = true; mode = 'drag'; vel = 0;
+        dragStartX = lastX = e.clientX; dragStartPos = target = pos; lastT = performance.now();
         if (wheelTimer) { clearTimeout(wheelTimer); wheelTimer = null; }
         try { galCanvas.setPointerCapture(e.pointerId); } catch (err) {}
         galCanvas.classList.add('dragging');
+        kick();
       });
       galCanvas.addEventListener('pointermove', function(e){
         if (!dragging) return;
-        pos = dragStartPos - (e.clientX - dragStartX);
-        if (pos < posMin) pos = posMin + (pos - posMin) * 0.35;
-        if (pos > posMax) pos = posMax + (pos - posMax) * 0.35;
+        /* El objetivo sigue al dedo/ratón con banda elástica en los
+           extremos; pos lo persigue suavizado en el bucle, sin saltos
+           aunque los eventos del puntero lleguen irregulares. */
+        var raw = dragStartPos - (e.clientX - dragStartX);
+        if (raw < posMin) raw = posMin + (raw - posMin) * 0.35;
+        if (raw > posMax) raw = posMax + (raw - posMax) * 0.35;
+        target = raw;
         var now = performance.now(), dt = now - lastT;
         if (dt > 0) {
           vel = 0.7 * vel + 0.3 * (-(e.clientX - lastX) / dt * 1000);
           lastX = e.clientX; lastT = now;
         }
-        render();
+        kick();
       });
       function galEnd(){
         if (!dragging) return;
         dragging = false;
         galCanvas.classList.remove('dragging');
-        if (pos < posMin || pos > posMax || Math.abs(vel) < 30) { mode = 'snap'; snapTarget = nearestCenter(clampPos(pos)); }
-        else mode = 'inertia';
+        /* Aterrizaje: se proyecta dónde llevaría el impulso y se fija
+           como objetivo la foto más cercana a ese punto (en los
+           extremos, el propio extremo de la tira). La llegada es una
+           frenada exponencial continua: sin rebote ni tirón final. */
+        var landing = (pos < posMin || pos > posMax) ? clampPos(pos) : clampPos(pos + vel * 0.22);
+        target = nearestCenter(landing);
+        mode = 'settle';
         kick();
       }
       galCanvas.addEventListener('pointerup', galEnd);
@@ -1331,22 +1350,34 @@
       galCanvas.addEventListener('wheel', function(e){
         var d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
         if (e.deltaMode === 1) d *= 16; else if (e.deltaMode === 2) d *= 400;
-        var np = clampPos(pos + d);
-        if (np === pos) return;
+        /* La rueda suma al objetivo y pos lo persigue suavizado en el
+           bucle: girar la rueda ya no mueve la foto a saltos, y al
+           llegar a un extremo el objetivo es el extremo mismo, así
+           que la foto frena hasta pararse sin chocar. En el extremo,
+           si ya no puede avanzar, se deja pasar el scroll a la página. */
+        var base = mode === 'idle' ? pos : target;
+        var nt = clampPos(base + d);
+        if (nt === base) return;
         e.preventDefault();
         e.stopPropagation();
-        pos = np; vel = 0; mode = 'idle';
-        render();
+        target = nt; mode = 'glide';
+        kick();
         if (wheelTimer) clearTimeout(wheelTimer);
-        wheelTimer = setTimeout(function(){ mode = 'snap'; snapTarget = nearestCenter(pos); kick(); }, 130);
+        wheelTimer = setTimeout(function(){
+          wheelTimer = null;
+          target = nearestCenter(target);
+          mode = 'settle';
+          kick();
+        }, 160);
       }, { passive: false });
       galStage.addEventListener('keydown', function(e){
         if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
         e.preventDefault();
+        var from = mode === 'idle' ? pos : target;
         var idx = 0, bd = Infinity;
-        centers.forEach(function(c, i){ var dd = Math.abs(c - pos); if (dd < bd) { bd = dd; idx = i; } });
+        centers.forEach(function(c, i){ var dd = Math.abs(c - from); if (dd < bd) { bd = dd; idx = i; } });
         idx = Math.max(0, Math.min(centers.length - 1, idx + (e.key === 'ArrowRight' ? 1 : -1)));
-        mode = 'snap'; snapTarget = clampPos(centers[idx]); kick();
+        target = clampPos(centers[idx]); mode = 'settle'; kick();
       });
       window.addEventListener('resize', resize);
 
@@ -1356,7 +1387,7 @@
       galStage.setAttribute('tabindex', '0');
       galStage.setAttribute('aria-label', 'Galería de proyectos: arrastra, usa la rueda o las flechas del teclado para recorrerla');
       metrics();
-      pos = clampPos(centers[1]); /* la segunda portada, al centro; la primera asoma por la lente izquierda */
+      pos = target = clampPos(centers[1]); /* la segunda portada, al centro; la primera asoma por la lente izquierda */
       resize();
     }
   }
