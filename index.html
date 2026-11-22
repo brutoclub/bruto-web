@@ -1128,7 +1128,19 @@
         var cx = (i % 3) * CW, cy = Math.floor(i / 3) * CH;
         var s = Math.max(CW / im.naturalWidth, CH / im.naturalHeight);
         var w = im.naturalWidth * s, h = im.naturalHeight * s;
+        /* Recorte a la celda: en cover, las fotos más altas o más
+           anchas que 4:3 se dibujan más grandes que su celda y, sin
+           este clip, pintan sobre las celdas vecinas del atlas (la
+           foto vertical siguiente tapaba con su parte superior gris
+           la mitad inferior del retrato SJR, y el propio retrato se
+           colaba bajo la foto anterior). Con el clip, cada celda
+           guarda solo su foto, completa y recta. */
+        actx.save();
+        actx.beginPath();
+        actx.rect(cx, cy, CW, CH);
+        actx.clip();
         actx.drawImage(im, cx + (CW - w) / 2, cy + (CH - h) / 2, w, h);
+        actx.restore();
       });
 
       var vsrc = 'attribute vec2 aPos;varying vec2 vPos;void main(){vPos=aPos;gl_Position=vec4(aPos,0.0,1.0);}';
