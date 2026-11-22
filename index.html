@@ -1153,6 +1153,7 @@
         'uniform vec3 uCell;',
         'uniform float uTotal;',
         'uniform float uK;',
+        'uniform float uAmp;',
         'vec4 sampleContent(vec2 c){',
         '  float x = clamp(c.x, 0.0, uTotal - 0.01);',
         '  float step = uCell.x + uCell.z;',
@@ -1181,22 +1182,37 @@
         '  vec2 c;',
         '  /* La hoja ondea a lo ancho: desplazamiento vertical senoidal',
         '     cuya amplitud crece hacia los bordes. */',
-        '  c.y = p.y + w * 33.0 * sin(p.x * 0.005);',
+        '  c.y = p.y + w * uAmp * sin(p.x * 0.005);',
         '  /* Abanico vertical: el borde de arriba se levanta y el de',
         '     abajo baja (al muestrear al contrario, la foto se abre). */',
         '  c.y -= w * yn * 16.0;',
+        '  /* Marco entero, sin cortes: la onda de arriba (seno + abanico)',
+        '     expandía las fotos laterales más allá del alto del lienzo y',
+        '     el navegador las rebanaba por arriba y por abajo. Aquí el',
+        '     muestreo vertical se comprime en proporción a la misma',
+        '     onda (en el centro, w=0, no cambia nada; hacia los bordes',
+        '     comprime justo lo que la onda expande y desplaza), así que',
+        '     el marco completo de cada foto —borde superior e inferior',
+        '     incluidos— queda siempre dentro del lienzo, con su onda. */',
+        '  c.y *= 1.0 + w * 0.5;',
         '  /* Curva en S: arriba la foto se dobla hacia atrás (hacia el',
         '     centro) y abajo hacia adelante, sin perder anchura. */',
         '  c.x = uScroll + p.x + w * yn * 39.0 * sx;',
         '  /* Ribete arcoíris sobre el borde curvado: separación de los',
-        '     canales rojo/azul en proporción a la onda, en horizontal',
-        '     y en vertical para que franquee también arriba y abajo. */',
+        '     canales rojo/azul en proporción a la onda, SOLO en',
+        '     horizontal. Sin desplazamiento vertical de canales: con',
+        '     él, junto a los bordes de arriba y abajo un canal leía la',
+        '     foto y otro el fondo blanco, y salía una línea de color',
+        '     (amarilla, magenta, azul) justo por el corte, como si la',
+        '     foto estuviera rebanada. Compartiendo los tres canales la',
+        '     misma c.y, el borde superior e inferior es limpio: foto',
+        '     entera o blanco, sin línea de corte. El ribete sigue en',
+        '     los bordes laterales curvados, como estaba. */',
         '  float off = w * 9.0 * sx;',
-        '  float offY = w * 3.6;',
         '  vec4 col;',
-        '  col.r = sampleContent(vec2(c.x + off, c.y + offY)).r;',
+        '  col.r = sampleContent(vec2(c.x + off, c.y)).r;',
         '  col.g = sampleContent(c).g;',
-        '  col.b = sampleContent(vec2(c.x - off, c.y - offY)).b;',
+        '  col.b = sampleContent(vec2(c.x - off, c.y)).b;',
         '  col.a = 1.0;',
         '  gl_FragColor = col;',
         '}'
@@ -1236,6 +1252,7 @@
       var uCell = gl.getUniformLocation(prog, 'uCell');
       var uTotal = gl.getUniformLocation(prog, 'uTotal');
       var uK = gl.getUniformLocation(prog, 'uK');
+      var uAmpL = gl.getUniformLocation(prog, 'uAmp');
 
       var viewW = 0, cellW = 0, cellH = 0, gap = 16, totalW = 0;
       var centers = [], posMin = 0, posMax = 0;
@@ -1267,6 +1284,11 @@
         gl.uniform3f(uCell, cellW, cellH, gap);
         gl.uniform1f(uTotal, totalW);
         gl.uniform1f(uK, galCanvas.width / Math.max(1, viewW));
+        /* Amplitud del seno: la de siempre (44, la onda exagerada) a
+           la altura completa del lienzo; en lienzos bajos se escala
+           con la altura para que, junto a la compresión del shader,
+           el marco entero quepa siempre sin tocar el fondo blanco. */
+        gl.uniform1f(uAmpL, 44 * Math.min(1, (galCanvas.clientHeight || 480) / 480));
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       }
