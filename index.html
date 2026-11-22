@@ -35,6 +35,10 @@
   }
   *{box-sizing:border-box}
   html{scroll-behavior:smooth}
+  /* Con Lenis activo manda solo su interpolación: si el navegador también
+     suaviza cada scroll que Lenis escribe, ambos se pelean y la página
+     baja a tirones. Lenis añade esta clase al <html> al arrancar. */
+  html.lenis-smooth{scroll-behavior:auto!important}
   body{margin:0;background:var(--paper);color:var(--ink);font-family:"Inter",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;line-height:1.55;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;overflow-x:hidden}
   /* Base de fluidez: todo lo que se mueve vive en la GPU */
   .band-track,.g-tile img,.svc-card,#disc,#progress,.hero h1 .line-in{backface-visibility:hidden;-webkit-backface-visibility:hidden}
@@ -211,7 +215,7 @@
   .form-note{font-size:.84rem;color:var(--muted);margin:0}
   .sent{display:none;background:var(--paper-2);color:var(--ink);padding:13px 15px;font-weight:600;font-size:.92rem}
   .sent.show{display:block}
-  .btn{display:inline-flex;align-items:center;gap:8px;text-decoration:none;font-weight:700;padding:15px 28px;min-height:52px;border:2px solid transparent;cursor:pointer;font-size:.98rem;transition:background-color .35s cubic-bezier(.22,1,.36,1),color .35s cubic-bezier(.22,1,.36,1),border-color .35s cubic-bezier(.22,1,.36,1),transform .55s cubic-bezier(.22,1,.36,1);will-change:transform}
+  .btn{display:inline-flex;align-items:center;gap:8px;text-decoration:none;font-weight:700;padding:15px 28px;min-height:52px;border:2px solid transparent;cursor:pointer;font-size:.98rem;transition:background-color .35s cubic-bezier(.22,1,.36,1),color .35s cubic-bezier(.22,1,.36,1),border-color .35s cubic-bezier(.22,1,.36,1);will-change:transform}
   .btn-ink{background:var(--ink);color:var(--paper)}
   .btn-ink:hover{background:var(--navy);color:#fff}
   .form-card .btn-ink{justify-content:center;width:100%}
@@ -289,7 +293,7 @@
   nav.main a:not(.cta){position:relative}
   nav.main a:not(.cta)::after{content:"";position:absolute;left:14px;right:14px;bottom:5px;height:2px;background:var(--coral);transform:scaleX(0);transform-origin:left;transition:transform .5s cubic-bezier(.22,1,.36,1);will-change:transform}
   nav.main a:not(.cta):hover::after,nav.main a:not(.cta):focus-visible::after{transform:scaleX(1)}
-  .cta{transition:transform .55s cubic-bezier(.22,1,.36,1),background-color .35s cubic-bezier(.22,1,.36,1),color .35s cubic-bezier(.22,1,.36,1);will-change:transform}
+  .cta{transition:background-color .35s cubic-bezier(.22,1,.36,1),color .35s cubic-bezier(.22,1,.36,1);will-change:transform}
 
   /* La segunda banda corre en sentido contrario */
   .band.rev .band-track{animation-direction:reverse}
@@ -306,7 +310,7 @@
 
   /* Galería: barrido de luz al pasar el ratón e inclinación 3D suave */
   .gal-strip{perspective:1200px}
-  .g-tile{transition:transform .65s cubic-bezier(.22,1,.36,1);transform:translate3d(0,0,0)}
+  .g-tile{transform:translate3d(0,0,0)}
   .g-tile::after{content:"";position:absolute;inset:0;background:linear-gradient(105deg,transparent 42%,rgba(255,255,255,.32) 50%,transparent 58%);transform:translate3d(-130%,0,0);transition:transform 1s cubic-bezier(.22,1,.36,1);pointer-events:none;z-index:2;will-change:transform}
   .g-tile:hover::after{transform:translate3d(130%,0,0)}
   .g-tile .g-arrow{z-index:3}
@@ -625,6 +629,10 @@
   "use strict";
   var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   var anim = document.documentElement.classList.contains('anim') && !reduced;
+  /* Decodificar las fotos fuera del hilo principal: si el navegador
+     decodifica una foto grande justo cuando entra en pantalla, ese
+     trabajo cortaba el scroll a mitad de la bajada. */
+  document.querySelectorAll('img').forEach(function(im){ im.decoding = 'async'; });
 
   /* ---------- Preloader: contador 0-100 y barra coral ---------- */
   var pre = document.getElementById('preloader');
@@ -660,15 +668,12 @@
   var lenis = null;
   if (anim && typeof Lenis !== 'undefined') {
     try {
-      lenis = new Lenis({
-        duration: 1.12,
-        lerp: 0.11,
-        smoothWheel: true,
-        wheelMultiplier: 1,
-        touchMultiplier: 1.1,
-        easing: function(t){ return Math.min(1, 1.001 - Math.pow(2, -10 * t)); }
-      });
-      (function raf(time){ lenis.raf(time); requestAnimationFrame(raf); })(performance.now());
+      /* Solo lerp (amortiguación exponencial continua): con duration +
+         easing a la vez, Lenis mezclaba dos suavizados y la cola del
+         frenado se cortaba de golpe. El bucle maestro de más abajo es
+         quien llama a lenis.raf, para que haya un único rAF. */
+      lenis = new Lenis({ lerp: 0.11, smoothWheel: true });
+      document.documentElement.style.scrollBehavior = 'auto';
     } catch (e) { lenis = null; }
   }
   /* ---------- Páginas: principal, Nosotros y Contacto por separado ---------- */
@@ -700,6 +705,7 @@
   function goToSection(id){
     var target = document.querySelector(id);
     if (!target) return;
+    kick(); /* despierta el bucle maestro para que Lenis anime el salto */
     if (lenis) lenis.scrollTo(target, { offset: -84 });
     else target.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth' });
   }
@@ -772,18 +778,25 @@
     });
   }
 
-  /* ---------- Header: encoge e inversión sobre zonas oscuras ---------- */
+  /* ---------- Header: encoge e inversión sobre zonas oscuras ----------
+     Se decide con la geometría en caché (geo, medida en measure()) y la
+     posición de scroll: nada de getBoundingClientRect ni offsetHeight
+     dentro del scroll, que obligaban a recalcular el layout en cada
+     frame y cortaban la bajada. Las clases solo se tocan cuando el
+     estado cambia de verdad. */
   var header = document.getElementById('site-header');
   var darkZones = Array.prototype.slice.call(document.querySelectorAll('[data-dark]'));
-  function headerState(){
-    var y = window.scrollY || 0;
-    header.classList.toggle('scrolled', y > 40);
-    var inv = false, hh = header.offsetHeight || 72;
-    for (var i = 0; i < darkZones.length; i++) {
-      var r = darkZones[i].getBoundingClientRect();
-      if (r.top < hh && r.bottom > hh) { inv = true; break; }
+  var geo = { vh: window.innerHeight, maxScroll: 1, headerH: 72, dark: [], plx: [] };
+  var headerScrolled = null, headerInv = null;
+  function headerState(y){
+    var sc = y > 40;
+    if (sc !== headerScrolled) { headerScrolled = sc; header.classList.toggle('scrolled', sc); }
+    var inv = false, hh = geo.headerH;
+    for (var i = 0; i < geo.dark.length; i++) {
+      var z = geo.dark[i];
+      if (z.top - y < hh && z.bottom - y > hh) { inv = true; break; }
     }
-    header.classList.toggle('inv', inv);
+    if (inv !== headerInv) { headerInv = inv; header.classList.toggle('inv', inv); }
   }
 
   /* ---------- Reveals al entrar en pantalla ---------- */
@@ -804,86 +817,158 @@
     document.querySelectorAll('.rv, .rv-img').forEach(function(el){ el.classList.add('inview'); });
   }
 
-  /* ---------- Parallax dentro de las fotos de la galería (con suavizado) ---------- */
+  /* ---------- Bucle maestro: un solo rAF para todo lo que sigue al scroll ----------
+     Antes convivían tres bucles separados (el de Lenis, el del parallax/
+     progreso y el del disco) y, en cada evento de scroll, lecturas de
+     layout (getBoundingClientRect de cada foto y zona oscura,
+     offsetHeight de la cabecera, scrollHeight del documento): ese
+     trabajo dentro del scroll era lo que trababa la bajada. Ahora:
+       · la geometría se mide solo en measure() —al inicio, al
+         redimensionar, al cambiar de página y cuando las fuentes
+         terminan de cargar—, nunca dentro del scroll;
+       · cada frame solo se lee window.scrollY y se hace matemáticas;
+       · toda interpolación es por tiempo (exp), idéntica a 60 Hz y
+         a 120 Hz;
+       · un estilo solo se escribe cuando su valor cambia de verdad;
+       · el bucle se duerme cuando todo está en reposo y lo despiertan
+         el scroll, la rueda, el tacto, el teclado, el ratón o un
+         resize, así en reposo no compite con nada. */
   var plxImgs = Array.prototype.slice.call(document.querySelectorAll('[data-plx]'));
   var plxTarget = plxImgs.map(function(){ return 0; });
   var plxCurrent = plxImgs.map(function(){ return 0; });
-  var ticking = false;
   function clamp01(v){ return v < 0 ? 0 : (v > 1 ? 1 : v); }
   var progress = document.getElementById('progress');
-  var progressTarget = 0, progressCurrent = 0;
-  function onScrollFrame(){
-    ticking = false;
-    headerState();
-    if (progress) {
-      var max = document.documentElement.scrollHeight - window.innerHeight;
-      progressTarget = max > 0 ? Math.min(1, Math.max(0, (window.scrollY || 0) / max)) : 0;
-      if (!anim) progress.style.transform = 'scaleX(' + progressTarget.toFixed(4) + ') translateZ(0)';
-    }
-    if (!anim) return;
-    var vh = window.innerHeight;
+  var progressTarget = 0, progressCurrent = 0, progressShown = -1;
+  function measure(){
+    var y = window.scrollY || 0;
+    geo.vh = window.innerHeight;
+    geo.maxScroll = Math.max(1, document.documentElement.scrollHeight - geo.vh);
+    geo.headerH = header.offsetHeight || 72;
+    geo.dark = darkZones.map(function(z){
+      var r = z.getBoundingClientRect();
+      return { top: r.top + y, bottom: r.bottom + y };
+    });
+    geo.plx = plxImgs.map(function(im){
+      var r = im.parentElement.getBoundingClientRect();
+      return { top: r.top + y, h: r.height };
+    });
+    headerScrolled = null; headerInv = null; /* reevaluar con la nueva geometría */
+  }
+  function updateTargets(y){
+    headerState(y);
+    progressTarget = Math.min(1, Math.max(0, y / geo.maxScroll));
+    var vh = geo.vh;
     for (var i = 0; i < plxImgs.length; i++) {
-      var im = plxImgs[i], pr = im.parentElement.getBoundingClientRect();
-      if (pr.bottom < -120 || pr.top > vh + 120) continue;
-      var pp = clamp01((vh - pr.top) / (vh + pr.height));
+      var g = geo.plx[i];
+      if (!g || g.h <= 0) continue;
+      var top = g.top - y;
+      if (top > vh + 120 || top + g.h < -120) continue;
+      var pp = clamp01((vh - top) / (vh + g.h));
       plxTarget[i] = (pp - 0.5) * -28;
     }
   }
-  /* Bucle de suavizado: interpola parallax y progreso hacia su objetivo
-     cada frame, así el scroll nunca se ve a saltos aunque Lenis o el
-     navegador entreguen posiciones irregulares. */
-  if (anim) {
-    var lastPlxT = performance.now();
-    (function smoothLoop(now){
-      var dt = Math.min(50, now - lastPlxT); lastPlxT = now;
-      /* factor independiente de la tasa de refresco (60/120Hz) */
-      var k = 1 - Math.pow(0.0015, dt / 1000); /* ~lerp suave */
-      var kFast = 1 - Math.pow(0.0005, dt / 1000);
-      if (progress) {
-        progressCurrent += (progressTarget - progressCurrent) * kFast;
-        if (Math.abs(progressTarget - progressCurrent) < 0.0004) progressCurrent = progressTarget;
+
+  /* Disco seguidor sobre la galería: su estado vive aquí y lo mueve el
+     bucle maestro (antes tenía su propio rAF corriendo siempre). */
+  var disc = document.getElementById('disc');
+  var discLive = anim && disc && window.matchMedia('(pointer: fine)').matches;
+  var mx = -100, my = -100, dx = -100, dy = -100, discOn = false, discInit = false;
+  var discShownX = 9999, discShownY = 9999;
+  if (discLive) {
+    document.addEventListener('mousemove', function(e){
+      mx = e.clientX; my = e.clientY;
+      if (!discInit) { dx = mx; dy = my; discInit = true; }
+      kick();
+    }, { passive: true });
+    document.querySelectorAll('.g-tile').forEach(function(m){
+      m.addEventListener('mouseenter', function(){ discOn = true; disc.style.opacity = '1'; kick(); });
+      m.addEventListener('mouseleave', function(){ discOn = false; disc.style.opacity = '0'; kick(); });
+    });
+  }
+
+  var loopRunning = false, lastY = -1, lastFrameT = 0;
+  function kick(){
+    if (!anim || loopRunning) return;
+    loopRunning = true;
+    lastFrameT = performance.now();
+    requestAnimationFrame(frame);
+  }
+  function frame(now){
+    var dt = Math.min(50, Math.max(1, now - lastFrameT)); lastFrameT = now;
+    if (lenis) lenis.raf(now);
+    var y = window.scrollY || 0;
+    var active = false;
+    if (y !== lastY) { lastY = y; updateTargets(y); active = true; }
+    /* Barra de progreso: amortiguación por tiempo, escritura solo al cambiar */
+    if (progress) {
+      var kFast = 1 - Math.exp(-dt / 120);
+      progressCurrent += (progressTarget - progressCurrent) * kFast;
+      if (Math.abs(progressTarget - progressCurrent) < 0.0006) progressCurrent = progressTarget;
+      if (progressCurrent !== progressShown) {
+        progressShown = progressCurrent;
         progress.style.transform = 'scaleX(' + progressCurrent.toFixed(4) + ') translateZ(0)';
       }
-      for (var i = 0; i < plxImgs.length; i++) {
-        var diff = plxTarget[i] - plxCurrent[i];
-        if (Math.abs(diff) < 0.05) { if (plxCurrent[i] !== plxTarget[i]) { plxCurrent[i] = plxTarget[i]; plxImgs[i].style.transform = 'translate3d(0,' + plxCurrent[i].toFixed(2) + 'px,0)'; } continue; }
-        plxCurrent[i] += diff * k;
-        plxImgs[i].style.transform = 'translate3d(0,' + plxCurrent[i].toFixed(2) + 'px,0)';
+      if (progressCurrent !== progressTarget) active = true;
+    }
+    /* Parallax de la galería: misma amortiguación, desde la caché */
+    var k = 1 - Math.exp(-dt / 150);
+    for (var i = 0; i < plxImgs.length; i++) {
+      var diff = plxTarget[i] - plxCurrent[i];
+      if (Math.abs(diff) < 0.05) {
+        if (plxCurrent[i] !== plxTarget[i]) { plxCurrent[i] = plxTarget[i]; plxImgs[i].style.transform = 'translate3d(0,' + plxCurrent[i].toFixed(2) + 'px,0)'; }
+        continue;
       }
-      requestAnimationFrame(smoothLoop);
-    })(performance.now());
-  }
-  function requestScroll(){
-    if (!ticking) { ticking = true; requestAnimationFrame(onScrollFrame); }
-  }
-  window.addEventListener('scroll', requestScroll, { passive: true });
-  window.addEventListener('resize', requestScroll);
-  if (lenis) lenis.on('scroll', requestScroll);
-  onScrollFrame();
-
-  /* ---------- Disco seguidor sobre la galería (GPU, sin left/top) ---------- */
-  var disc = document.getElementById('disc');
-  if (anim && disc && window.matchMedia('(pointer: fine)').matches) {
-    var mx = -100, my = -100, dx = -100, dy = -100, discOn = false, discInit = false;
-    document.addEventListener('mousemove', function(e){ mx = e.clientX; my = e.clientY; if (!discInit) { dx = mx; dy = my; discInit = true; } }, { passive: true });
-    document.querySelectorAll('.g-tile').forEach(function(m){
-      m.addEventListener('mouseenter', function(){ discOn = true; disc.style.opacity = '1'; });
-      m.addEventListener('mouseleave', function(){ discOn = false; disc.style.opacity = '0'; });
-    });
-    var lastDiscT = performance.now();
-    (function follow(now){
-      var dt = Math.min(50, now - lastDiscT); lastDiscT = now;
-      /* lerp corregido por tiempo: igual de suave a 60Hz y a 120Hz.
-         Si el disco está oculto y ya llegó al cursor, no se reescribe
-         el transform: el bucle queda en reposo y no compite con el scroll. */
-      var k = 1 - Math.pow(0.0001, dt / 1000);
-      dx += (mx - dx) * k; dy += (my - dy) * k;
-      if (discOn || Math.abs(mx - dx) > 0.15 || Math.abs(my - dy) > 0.15) {
+      plxCurrent[i] += diff * k;
+      plxImgs[i].style.transform = 'translate3d(0,' + plxCurrent[i].toFixed(2) + 'px,0)';
+      active = true;
+    }
+    /* Disco seguidor: lerp por tiempo; en reposo no escribe nada */
+    if (discLive) {
+      var kd = 1 - Math.exp(-dt / 110);
+      dx += (mx - dx) * kd; dy += (my - dy) * kd;
+      if (Math.abs(mx - dx) > 0.15 || Math.abs(my - dy) > 0.15) active = true;
+      if (discOn || Math.abs(dx - discShownX) > 0.1 || Math.abs(dy - discShownY) > 0.1) {
+        discShownX = dx; discShownY = dy;
         disc.style.transform = 'translate3d(' + dx.toFixed(1) + 'px,' + dy.toFixed(1) + 'px,0) translate(-50%,-50%)';
       }
-      requestAnimationFrame(follow);
-    })(performance.now());
+    }
+    /* Lenis puede seguir animando aunque en este frame scrollY aún no
+       se haya movido (arranque) o ya casi no se mueva (cola del frenado) */
+    if (lenis && (lenis.isScrolling || Math.abs(lenis.velocity || 0) > 0.02)) active = true;
+    if (active) requestAnimationFrame(frame);
+    else loopRunning = false;
   }
+  function requestScroll(){ kick(); }
+  window.addEventListener('scroll', kick, { passive: true });
+  window.addEventListener('wheel', kick, { passive: true });
+  window.addEventListener('touchstart', kick, { passive: true });
+  window.addEventListener('keydown', kick);
+  window.addEventListener('resize', function(){ measure(); kick(); });
+  if (lenis) lenis.on('scroll', kick);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(function(){ measure(); kick(); });
+  window.addEventListener('load', function(){ measure(); kick(); });
+  measure();
+  if (anim) {
+    lastY = window.scrollY || 0;
+    updateTargets(lastY);
+    kick();
+  } else {
+    /* Sin animación (reduced-motion o sin html.anim): header y progreso
+       directos en el evento de scroll, también desde la caché. */
+    var liteTick = false;
+    window.addEventListener('scroll', function(){
+      if (liteTick) return; liteTick = true;
+      requestAnimationFrame(function(){
+        liteTick = false;
+        var y = window.scrollY || 0;
+        headerState(y);
+        if (progress) progress.style.transform = 'scaleX(' + Math.min(1, Math.max(0, y / geo.maxScroll)).toFixed(4) + ') translateZ(0)';
+      });
+    }, { passive: true });
+    headerState(window.scrollY || 0);
+  }
+
+  /* (El disco seguidor lo mueve el bucle maestro de arriba.) */
 
   /* ---------- Segunda capa de animación ---------- */
   if (anim) {
@@ -928,9 +1013,14 @@
       /* Inclinación 3D suave en las fotos de la galería: objetivo + lerp
          en rAF, nunca un transform directo por cada mousemove */
       document.querySelectorAll('.g-tile').forEach(function(tile){
-        var tRX = 0, tRY = 0, cRX = 0, cRY = 0, hovering = false, rafOn = false;
-        function tiltLoop(){
-          cRX += (tRX - cRX) * 0.14; cRY += (tRY - cRY) * 0.14;
+        var tRX = 0, tRY = 0, cRX = 0, cRY = 0, hovering = false, rafOn = false, tiltLast = performance.now();
+        function tiltLoop(now){
+          /* Interpolación por tiempo: con el factor fijo por frame, a
+             120 Hz la inclinación convergía el doble de rápido que a
+             60 Hz y se notaba a tirones según la pantalla. */
+          var dt = Math.min(50, Math.max(1, now - tiltLast)); tiltLast = now;
+          var kk = 1 - Math.exp(-dt / 110);
+          cRX += (tRX - cRX) * kk; cRY += (tRY - cRY) * kk;
           if (Math.abs(tRX - cRX) < 0.02 && Math.abs(tRY - cRY) < 0.02 && !hovering) {
             cRX = tRX; cRY = tRY; rafOn = false;
             tile.style.transform = (cRX === 0 && cRY === 0) ? '' : 'perspective(1100px) rotateX(' + cRX.toFixed(2) + 'deg) rotateY(' + cRY.toFixed(2) + 'deg) translateZ(0)';
@@ -939,7 +1029,7 @@
           tile.style.transform = 'perspective(1100px) rotateX(' + cRX.toFixed(2) + 'deg) rotateY(' + cRY.toFixed(2) + 'deg) translateZ(0)';
           requestAnimationFrame(tiltLoop);
         }
-        function kick(){ if (!rafOn) { rafOn = true; requestAnimationFrame(tiltLoop); } }
+        function kick(){ if (!rafOn) { rafOn = true; tiltLast = performance.now(); requestAnimationFrame(tiltLoop); } }
         tile.addEventListener('mousemove', function(e){
           var r = tile.getBoundingClientRect();
           var px = (e.clientX - r.left) / r.width - 0.5;
@@ -951,9 +1041,11 @@
 
       /* Botones magnéticos: siguen al cursor con lerp, vuelven solos */
       document.querySelectorAll('.cta, .btn-ink').forEach(function(el){
-        var tX = 0, tY = 0, cX = 0, cY = 0, hovering = false, rafOn = false;
-        function magLoop(){
-          cX += (tX - cX) * 0.16; cY += (tY - cY) * 0.16;
+        var tX = 0, tY = 0, cX = 0, cY = 0, hovering = false, rafOn = false, magLast = performance.now();
+        function magLoop(now){
+          var dt = Math.min(50, Math.max(1, now - magLast)); magLast = now;
+          var kk = 1 - Math.exp(-dt / 95);
+          cX += (tX - cX) * kk; cY += (tY - cY) * kk;
           if (Math.abs(tX - cX) < 0.1 && Math.abs(tY - cY) < 0.1 && !hovering) {
             cX = tX; cY = tY; rafOn = false;
             el.style.transform = (cX === 0 && cY === 0) ? '' : 'translate3d(' + cX.toFixed(1) + 'px,' + cY.toFixed(1) + 'px,0)';
@@ -962,7 +1054,7 @@
           el.style.transform = 'translate3d(' + cX.toFixed(1) + 'px,' + cY.toFixed(1) + 'px,0)';
           requestAnimationFrame(magLoop);
         }
-        function kick(){ if (!rafOn) { rafOn = true; requestAnimationFrame(magLoop); } }
+        function kick(){ if (!rafOn) { rafOn = true; magLast = performance.now(); requestAnimationFrame(magLoop); } }
         el.addEventListener('mousemove', function(e){
           var r = el.getBoundingClientRect();
           tX = (e.clientX - (r.left + r.width / 2)) * 0.16;
@@ -1035,7 +1127,9 @@
       svcVp.scrollLeft = sStartSL - dx;
       var now = performance.now(), dt = now - sLastMoveT;
       if (dt > 0) {
-        sVel = 0.75 * sVel + 0.25 * (-(e.clientX - sLastX) / dt * 16.7);
+        /* Velocidad en px/ms: así la inercia al soltar no depende de
+           cuántos eventos de puntero lleguen por segundo */
+        sVel = 0.75 * sVel + 0.25 * (-(e.clientX - sLastX) / dt);
         sLastX = e.clientX; sLastMoveT = now;
       }
     });
@@ -1043,13 +1137,18 @@
       if (!sDrag) return;
       sDrag = false;
       svcVp.classList.remove('dragging');
-      if (reduced || Math.abs(sVel) < 0.35) { sVel = 0; return; }
-      /* Inercia al soltar: la pista sigue y se frena sola */
-      var step = function(){
-        svcVp.scrollLeft += sVel;
-        sVel *= 0.94;
+      if (reduced || Math.abs(sVel) < 0.02) { sVel = 0; return; }
+      /* Inercia al soltar: la pista sigue y se frena sola. El frenado
+         es exponencial por tiempo: con el factor fijo por frame de
+         antes, en pantallas de 120 Hz se frenaba en la mitad de
+         tiempo y el final se sentía brusco. */
+      var sLastStepT = performance.now();
+      var step = function(now){
+        var dt = Math.min(50, Math.max(1, now - sLastStepT)); sLastStepT = now;
+        svcVp.scrollLeft += sVel * dt;
+        sVel *= Math.exp(-dt / 270);
         var maxSL = svcVp.scrollWidth - svcVp.clientWidth;
-        if (Math.abs(sVel) > 0.35 && svcVp.scrollLeft > 0 && svcVp.scrollLeft < maxSL) {
+        if (Math.abs(sVel) > 0.02 && svcVp.scrollLeft > 0 && svcVp.scrollLeft < maxSL) {
           sMomRaf = requestAnimationFrame(step);
         } else { sMomRaf = null; sVel = 0; }
       };
@@ -1254,7 +1353,7 @@
       var uK = gl.getUniformLocation(prog, 'uK');
       var uAmpL = gl.getUniformLocation(prog, 'uAmp');
 
-      var viewW = 0, cellW = 0, cellH = 0, gap = 16, totalW = 0;
+      var viewW = 0, cellW = 0, cellH = 0, gap = 16, totalW = 0, canvasCssH = 480;
       var centers = [], posMin = 0, posMax = 0;
       /* Movimiento por objetivo: pos siempre persigue a target con una
          aproximación exponencial (rápida al principio, cada vez más
@@ -1288,12 +1387,13 @@
            la altura completa del lienzo; en lienzos bajos se escala
            con la altura para que, junto a la compresión del shader,
            el marco entero quepa siempre sin tocar el fondo blanco. */
-        gl.uniform1f(uAmpL, 44 * Math.min(1, (galCanvas.clientHeight || 480) / 480));
+        gl.uniform1f(uAmpL, 44 * Math.min(1, canvasCssH / 480));
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       }
       function resize(){
         var dpr = Math.min(2, window.devicePixelRatio || 1);
+        canvasCssH = galCanvas.clientHeight || 480; /* medido aquí, no en cada frame */
         galCanvas.width = Math.round(galStage.clientWidth * dpr);
         galCanvas.height = Math.round(galCanvas.clientHeight * dpr);
         gl.viewport(0, 0, galCanvas.width, galCanvas.height);
