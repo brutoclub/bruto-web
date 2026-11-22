@@ -102,12 +102,16 @@
   .sec-head h2{font-size:clamp(1.9rem,4.2vw,3rem);font-weight:800;letter-spacing:-.03em;line-height:1.06;margin:0}
   .sec-head p{color:var(--muted);margin:12px 0 0;font-size:1.03rem;max-width:36rem}
 
-  /* ---------- Proyectos: carrusel con lente de cristal líquido ----------
-     Fila continua de las 9 portadas: centro recto y nítido y, en los
-     laterales, una lente elíptica inclinada que las estira y separa los
-     canales rojo/verde/azul en los bordes (shader WebGL, ver el JS).
-     Sin WebGL o con reduced-motion queda la tira horizontal normal de
-     .gal-strip, con las mismas 9 imágenes en el mismo orden. */
+  /* ---------- Proyectos: carrusel con onda suave ----------
+     Fila continua de las 9 portadas sobre fondo blanco: la foto central
+     va recta y entera y, hacia los bordes, cada foto se dobla poco a
+     poco como una hoja o una bandera ondeando (onda en S: el borde de
+     arriba se levanta y se curva hacia atrás, el de abajo baja), SIN
+     comprimirse en cintas finas: sigue ancha y legible. El borde
+     curvado lleva el ribete arcoíris por separación de canales
+     (shader WebGL, ver el JS). Sin WebGL o con reduced-motion queda
+     la tira horizontal normal de .gal-strip, con las mismas 9
+     imágenes en el mismo orden. */
   .gal-stage{position:relative}
   .gal-stage:focus-visible{outline:3px solid var(--focus);outline-offset:4px}
   .gal-strip{display:flex;gap:clamp(14px,2vw,24px);overflow-x:auto;overflow-y:hidden;padding:6px 0 16px;scroll-snap-type:x proximity;scrollbar-width:none;-ms-overflow-style:none}
@@ -383,9 +387,9 @@
 
   <div class="band" data-dark aria-hidden="true"><div class="band-track" data-band><span>nuestros proyectos</span><span>nuestros proyectos</span><span>nuestros proyectos</span></div></div>
 
-  <!-- PROYECTOS: carrusel de las 9 portadas con lente de cristal líquido.
-       La tira .gal-strip es la versión normal (y la reserva si WebGL falla);
-       con WebGL, el lienzo la sustituye en el mismo sitio. -->
+  <!-- PROYECTOS: carrusel de las 9 portadas con onda suave sobre fondo
+       blanco. La tira .gal-strip es la versión normal (y la reserva si
+       WebGL falla); con WebGL, el lienzo la sustituye en el mismo sitio. -->
   <section class="sec" id="proyectos" aria-label="Proyectos">
     <!-- Sin .wrap: el carrusel cubre todo el ancho de la página, de borde a borde -->
     <div class="gal-stage" id="gal-stage">
@@ -1071,13 +1075,19 @@
     svcSetActive(svcNearest());
   }
 
-  /* ---------- Proyectos: carrusel con lente de cristal líquido (WebGL) ----------
+  /* ---------- Proyectos: carrusel con onda suave (WebGL) ----------
      Sin librerías: las 9 portadas de la tira se montan en un atlas 3×3 y un
-     único quad las dibuja como fila continua. El shader deforma la
-     coordenada de lectura con una elipse inclinada: en el centro la
-     deformación es cero (imagen recta y nítida) y hacia los laterales las
-     imágenes se estiran y los canales rojo/verde/azul se separan en
-     proporción a la deformación. Se arrastra con ratón/dedo, se mueve con
+     único quad las dibuja como fila continua sobre fondo blanco. El shader
+     NO comprime las fotos: dobla la coordenada de lectura con una onda
+     suave cuyo peso es cero en el centro (foto central recta y entera) y
+     crece hacia los bordes. La onda combina un desplazamiento vertical
+     senoidal a lo ancho (la hoja ondea), un abanico vertical (el borde de
+     arriba se levanta, el de abajo baja) y una cizalla en S (arriba se
+     curva hacia atrás, abajo hacia adelante), así que las fotos laterales
+     se doblan como una bandera pero siguen anchas y legibles, nunca
+     aplastadas en cintas finas. Sobre el borde curvado, los canales
+     rojo/verde/azul se separan en proporción a la onda: el ribete
+     arcoíris. Se arrastra con ratón/dedo, se mueve con
      la rueda y con las flechas del teclado, con inercia y parada suave en
      la imagen más cercana. Si WebGL falla o una imagen no carga, se queda
      la tira horizontal normal. Con reduced-motion ni se intenta. */
@@ -1148,18 +1158,33 @@
         'void main(){',
         '  vec2 viewCss = uView / uK;',
         '  vec2 p = vPos * viewCss * 0.5;',
-        '  float ca = cos(-0.30), sa = sin(-0.30);',
-        '  vec2 rp = mat2(ca, -sa, sa, ca) * p;',
-        '  float r = length(vec2(rp.x / (viewCss.x * 0.60), rp.y / (viewCss.y * 0.88)));',
-        '  float d = smoothstep(0.30, 1.05, r);',
+        '  /* Onda suave: peso cero en el centro (la foto central va recta',
+        '     y entera) y creciente hacia los bordes. No hay compresión',
+        '     horizontal: las fotos laterales se doblan, no se aplastan. */',
+        '  float t = clamp(abs(p.x) / (viewCss.x * 0.5), 0.0, 1.0);',
+        '  float w = smoothstep(0.40, 1.05, t);',
+        '  w = w * w;',
+        '  float sx = p.x >= 0.0 ? 1.0 : -1.0;',
+        '  float yn = clamp(p.y / (uCell.y * 0.5), -1.2, 1.2);',
         '  vec2 c;',
-        '  c.x = uScroll + p.x * (1.0 - d * 0.38);',
-        '  c.y = p.y * (1.0 - d * 0.15);',
-        '  float off = d * 7.0 * (p.x >= 0.0 ? 1.0 : -1.0);',
+        '  /* La hoja ondea a lo ancho: desplazamiento vertical senoidal',
+        '     cuya amplitud crece hacia los bordes. */',
+        '  c.y = p.y + w * 26.0 * sin(p.x * 0.005);',
+        '  /* Abanico vertical: el borde de arriba se levanta y el de',
+        '     abajo baja (al muestrear al contrario, la foto se abre). */',
+        '  c.y -= w * yn * 12.0;',
+        '  /* Curva en S: arriba la foto se dobla hacia atrás (hacia el',
+        '     centro) y abajo hacia adelante, sin perder anchura. */',
+        '  c.x = uScroll + p.x + w * yn * 30.0 * sx;',
+        '  /* Ribete arcoíris sobre el borde curvado: separación de los',
+        '     canales rojo/azul en proporción a la onda, en horizontal',
+        '     y en vertical para que franquee también arriba y abajo. */',
+        '  float off = w * 6.0 * sx;',
+        '  float offY = w * 2.5;',
         '  vec4 col;',
-        '  col.r = sampleContent(vec2(c.x + off, c.y)).r;',
+        '  col.r = sampleContent(vec2(c.x + off, c.y + offY)).r;',
         '  col.g = sampleContent(c).g;',
-        '  col.b = sampleContent(vec2(c.x - off, c.y)).b;',
+        '  col.b = sampleContent(vec2(c.x - off, c.y - offY)).b;',
         '  col.a = 1.0;',
         '  gl_FragColor = col;',
         '}'
@@ -1209,7 +1234,10 @@
       function clampPos(v){ return Math.max(posMin, Math.min(posMax, v)); }
       function metrics(){
         viewW = galStage.clientWidth;
-        cellH = galCanvas.clientHeight;
+        /* La foto ocupa el 90% del alto del lienzo: el 10% restante es
+           el aire blanco donde la onda se levanta y baja en los bordes
+           sin que la foto se recorte contra el lienzo. */
+        cellH = Math.round(galCanvas.clientHeight * 0.9);
         cellW = Math.round(cellH * 4 / 3);
         totalW = 9 * cellW + 8 * gap;
         posMin = viewW / 2; posMax = totalW - viewW / 2;
